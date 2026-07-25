@@ -263,6 +263,19 @@ body{
 .stat-value{font-size:1.1rem;font-weight:700;color:var(--accent);line-height:1.2}
 .stat-label{font-size:0.58rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;font-weight:500}
 
+.btn-pdf{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  width:100%;padding:8px 12px;margin-bottom:10px;border-radius:8px;
+  background:linear-gradient(135deg,rgba(239,68,68,0.15),rgba(239,68,68,0.05));
+  border:1px solid rgba(239,68,68,0.25);color:#ef4444;
+  font-size:0.76rem;font-weight:600;cursor:pointer;
+  transition:all 0.25s;
+}
+.btn-pdf:hover{
+  background:linear-gradient(135deg,rgba(239,68,68,0.25),rgba(239,68,68,0.10));
+  border-color:rgba(239,68,68,0.45);transform:translateY(-1px);
+}
+
 .tech-note{
   font-size:0.6rem;color:var(--text-muted);line-height:1.5;
   display:flex;gap:6px;align-items:flex-start;

@@ -4,14 +4,14 @@
   var LY = [
     { id: "v_limite_cuenca_geojson", nombre: "Limite Cuenca", vista: "v_limite_cuenca_geojson", gf: "geometry", tipo: "polygon",
       auto: true, activo: false, data: null, lyr: null, cnt: 0,
-      pop: [["parroquia", "Parroquia"]], sty: { color: "#ef4444", weight: 3, fillOpacity: 0 },
-      svg: '<svg width="20" height="14"><rect x="1" y="1" width="18" height="12" fill="none" stroke="#ef4444" stroke-width="2"/></svg>' },
+      pop: [["parroquia", "Parroquia"]], sty: { color: "#06b6d4", weight: 3, fillOpacity: 0 },
+      svg: '<svg width="20" height="14"><rect x="1" y="1" width="18" height="12" fill="none" stroke="#06b6d4" stroke-width="2" stroke-dasharray="5,3"/></svg>' },
     { id: "v_rios_urbanos_cuenca_geojson", nombre: "Rios Urbanos", vista: "v_rios_urbanos_cuenca_geojson", gf: "geometry", tipo: "line",
       auto: true, activo: false, data: null, lyr: null, cnt: 0,
       pop: [["nombre", "Nombre"], ["tipo", "Tipo"], ["long_km", "Longitud (km)"]], sty: { color: "#3b82f6", weight: 3, fillOpacity: 0 },
       svg: '<svg width="20" height="14"><line x1="1" y1="7" x2="19" y2="7" stroke="#3b82f6" stroke-width="3"/></svg>' },
     { id: "v_vias_urbanas_cuenca_geojson", nombre: "Vias Urbanas", vista: "v_vias_urbanas_cuenca_geojson", gf: "geometry", tipo: "line",
-      auto: true, activo: false, data: null, lyr: null, cnt: 0,
+      auto: false, activo: false, data: null, lyr: null, cnt: 0,
       pop: [["nombre", "Nombre"], ["tipo", "Via"], ["codvia", "Codigo"]], sty: { color: "#c97b3a", weight: 2 },
       svg: '<svg width="20" height="14"><line x1="1" y1="7" x2="19" y2="7" stroke="#c97b3a" stroke-width="2"/></svg>' },
     { id: "v_predios_cuenca_geojson", nombre: "Predios", vista: "v_predios_cuenca_geojson", gf: "geometry", tipo: "polygon",
@@ -542,6 +542,129 @@
       validateConstruccionForm();
     });
   }
+
+  /* ═══ PDF GENERATION ═══════════════════════════════════════════ */
+  window.generarPDF = function () {
+    var jsPDF = window.jspdf.jsPDF;
+    var doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
+    var pageW = doc.internal.pageSize.getWidth();
+    var y = 15;
+    var RPT_COLORS_HEX = {
+      "Bache en via": [239,68,68], "Alumbrado danado": [234,179,8], "Basura acumulada": [34,197,94],
+      "Inundacion": [59,130,246], "Deslizamiento": [168,85,247], "Vandalismo": [236,72,153],
+      "Arbol caido": [16,185,129], "Tapa alcantarilla": [107,114,128], "Fuga de agua": [6,182,212],
+      "Parque deteriorado": [20,184,166], "Senalizacion": [249,115,22], "Otro": [148,163,184]
+    };
+    var PRIO_HEX = { "Baja": [34,197,94], "Media": [249,115,22], "Alta": [239,68,68] };
+
+    doc.setFillColor(15, 15, 35);
+    doc.rect(0, 0, pageW, 28, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(18);
+    doc.setFont("helvetica", "bold");
+    doc.text("Geoportal Cuenca - Reportes", 15, 12);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "normal");
+    doc.text("Generado: " + new Date().toLocaleDateString("es-EC", { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }), 15, 19);
+    doc.setFontSize(8);
+    doc.setTextColor(180, 180, 200);
+    doc.text("UTPL - Especializacion en Gestion de la Geoinformacion, 2026", 15, 25);
+    y = 36;
+
+    function sectionTitle(title, r, g, b) {
+      if (y > 240) { doc.addPage(); y = 15; }
+      doc.setFillColor(r, g, b);
+      doc.roundedRect(15, y - 4, pageW - 30, 9, 2, 2, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text(title, 20, y + 1.5);
+      doc.setTextColor(0, 0, 0);
+      y += 10;
+    }
+
+    function drawTable(headers, rows, colors) {
+      if (rows.length === 0) {
+        doc.setFontSize(9);
+        doc.setTextColor(150, 150, 150);
+        doc.text("Sin reportes registrados.", 20, y);
+        y += 6;
+        return;
+      }
+      doc.autoTable({
+        startY: y,
+        head: [headers],
+        body: rows,
+        theme: "grid",
+        styles: { fontSize: 7.5, cellPadding: 2.5, textColor: [30, 30, 30], lineColor: [60, 60, 80], lineWidth: 0.2 },
+        headStyles: { fillColor: [30, 30, 50], textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5 },
+        alternateRowStyles: { fillColor: [245, 245, 250] },
+        columnStyles: colors || {},
+        margin: { left: 15, right: 15 },
+        didDrawPage: function (data) { y = data.cursor.y + 5; }
+      });
+      y = doc.lastAutoTable.finalY + 6;
+    }
+
+    var rcDef = find("reportes_ciudadanos");
+    var rcData = (rcDef && rcDef.data) ? rcDef.data.features : [];
+    var rcRows = [];
+    rcData.forEach(function (f) {
+      var p = f.properties || {};
+      rcRows.push([
+        p.tipo || "-",
+        p.descripcion || "-",
+        p.nombre || "-",
+        p.estado || "-",
+        p.fecha ? fmtDate(p.fecha) : "-"
+      ]);
+    });
+    sectionTitle("Reportes Ciudadanos (" + rcRows.length + ")", 245, 158, 11);
+    drawTable(
+      ["Tipo", "Descripcion", "Reportado por", "Estado", "Fecha"],
+      rcRows,
+      { 0: { cellWidth: 30 }, 4: { cellWidth: 28 } }
+    );
+
+    var rrDef = find("v_reportes_construcciones_geojson");
+    var rrData = (rrDef && rrDef.data) ? rrDef.data.features : [];
+    var rrRows = [];
+    rrData.forEach(function (f) {
+      var p = f.properties || {};
+      rrRows.push([
+        p.clave_construccion || p.id_construccion || "-",
+        p.bloque || "-",
+        p.estado_observado || "-",
+        p.prioridad || "-",
+        p.comentario || "-",
+        p.fecha_reporte ? fmtDate(p.fecha_reporte) : "-"
+      ]);
+    });
+    sectionTitle("Reportes de Construcciones (" + rrRows.length + ")", 249, 115, 22);
+    drawTable(
+      ["Construccion", "Bloque", "Estado", "Prioridad", "Comentario", "Fecha"],
+      rrRows,
+      { 4: { cellWidth: 45 }, 5: { cellWidth: 28 } }
+    );
+
+    var totalReportes = rcRows.length + rrRows.length;
+    if (y > 240) { doc.addPage(); y = 15; }
+    y += 4;
+    doc.setFillColor(99, 102, 241);
+    doc.roundedRect(15, y - 4, pageW - 30, 9, 2, 2, "F");
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.text("Total de reportes: " + totalReportes + "  |  Ciudadanos: " + rcRows.length + "  |  Construcciones: " + rrRows.length, 20, y + 1.5);
+
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    var footerY = doc.internal.pageSize.getHeight() - 8;
+    doc.text("Geoportal Cuenca - UTPL Especializacion en Gestion de la Geoinformacion", 15, footerY);
+
+    doc.save("Reportes_Geoportal_Cuenca_" + new Date().toISOString().slice(0, 10) + ".pdf");
+    toast("PDF generado correctamente", "success");
+  };
 
   /* ═══ INIT ═════════════════════════════════════════════════ */
   showLoad("Inicializando geoportal...");
