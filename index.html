@@ -194,6 +194,11 @@
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="8" width="3" height="5" rx="0.5" fill="currentColor" opacity="0.7"/><rect x="5.5" y="5" width="3" height="8" rx="0.5" fill="currentColor" opacity="0.85"/><rect x="10" y="2" width="3" height="11" rx="0.5" fill="currentColor"/></svg>
         Graficos de Area
       </button>
+      <button class="btn-pdf btn-river" onclick="calcularMargenes()">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 5C3 3 5 7 7 5C9 3 11 7 13 5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M1 9C3 7 5 11 7 9C9 7 11 11 13 9" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.5"/></svg>
+        Margenes Proteccion Rios (50m)
+      </button>
+      <div id="river-margin-info"></div>
       <div class="tech-note">
         <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#6366f1" stroke-width="1" fill="none"/><path d="M6 5V8M6 3.5V4" stroke="#6366f1" stroke-width="1" stroke-linecap="round"/></svg>
         Las capas se consumen desde Supabase/PostGIS mediante vistas GeoJSON. Los reportes ciudadanos se almacenan como puntos geometricos en EPSG:4326.

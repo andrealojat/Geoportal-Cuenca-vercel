@@ -558,20 +558,49 @@
   var chartInstance = null;
   var currentChartTab = "predios";
 
-  function computeAreaRanges(features, areaKey) {
+  function polygonAreaM2(geometry) {
+    if (!geometry || !geometry.coordinates) return 0;
+    var coords;
+    if (geometry.type === "Polygon") coords = geometry.coordinates[0];
+    else if (geometry.type === "MultiPolygon") {
+      var total = 0;
+      geometry.coordinates.forEach(function (p) { total += polygonAreaM2({ type: "Polygon", coordinates: p }); });
+      return total;
+    } else return 0;
+    var n = coords.length;
+    if (n < 3) return 0;
+    var area = 0;
+    for (var i = 0; i < n - 1; i++) {
+      area += (coords[i + 1][0] - coords[i][0]) * (coords[i][1] + coords[i + 1][1]);
+    }
+    area += (coords[0][0] - coords[n - 1][0]) * (coords[0][1] + coords[n - 1][1]);
+    return Math.abs(area / 2) * 111319.49 * 111319.49 * Math.cos(-2.9 * Math.PI / 180);
+  }
+
+  function getAreas(features) {
     var areas = [];
+    var hasAreaProp = features.length > 0 && features[0].properties && features[0].properties.area != null && !isNaN(features[0].properties.area);
     features.forEach(function (f) {
-      var a = f.properties && f.properties[areaKey];
-      if (a != null && !isNaN(a) && a > 0) areas.push(Number(a));
+      var a = 0;
+      if (hasAreaProp) {
+        a = Number(f.properties.area);
+      } else if (f.geometry) {
+        a = polygonAreaM2(f.geometry);
+      }
+      if (a > 0) areas.push(a);
     });
-    if (areas.length === 0) return { labels: [], counts: [], total: 0, avg: 0, min: 0, max: 0 };
+    return areas;
+  }
+
+  function buildBins(areas) {
+    if (areas.length === 0) return { labels: [], counts: [], total: 0, avg: 0, min: 0, max: 0, sum: 0 };
     areas.sort(function (a, b) { return a - b; });
     var maxVal = areas[areas.length - 1];
     var binSize;
-    if (maxVal <= 200) binSize = 20;
-    else if (maxVal <= 1000) binSize = 100;
-    else if (maxVal <= 5000) binSize = 500;
-    else if (maxVal <= 20000) binSize = 2000;
+    if (maxVal <= 100) binSize = 10;
+    else if (maxVal <= 500) binSize = 50;
+    else if (maxVal <= 2000) binSize = 200;
+    else if (maxVal <= 10000) binSize = 1000;
     else binSize = 5000;
     var bins = {};
     areas.forEach(function (a) {
@@ -582,65 +611,68 @@
     var labels = Object.keys(bins).sort(function (a, b) { return parseInt(a) - parseInt(b); });
     var counts = labels.map(function (l) { return bins[l]; });
     var sum = areas.reduce(function (s, v) { return s + v; }, 0);
-    return { labels: labels, counts: counts, total: areas.length, avg: Math.round(sum / areas.length), min: areas[0], max: areas[areas.length - 1] };
+    return { labels: labels, counts: counts, total: areas.length, avg: Math.round(sum / areas.length), min: Math.round(areas[0]), max: Math.round(areas[areas.length - 1]), sum: Math.round(sum) };
+  }
+
+  function ensureLayerAndThen(type, cb) {
+    var id = type === "predios" ? "v_predios_cuenca_geojson" : "v_construcciones_cuenca_geojson";
+    var def = find(id);
+    if (!def) { toast("Capa no encontrada", "error"); return; }
+    if (def.data && def.data.features && def.data.features.length > 0) { cb(def); return; }
+    showLoad("Cargando " + def.nombre + " para graficos...");
+    cargar(def).then(function () {
+      addToMap(def);
+      var el = $("tog-" + def.id); if (el) el.classList.add("active");
+      var card = document.querySelector('[data-layer="' + def.id + '"]');
+      if (card) card.classList.add("active");
+      refreshUI();
+      cb(def);
+    }).catch(function (e) {
+      toast("Error cargando " + def.nombre + ": " + e.message, "error");
+    }).finally(function () { hideLoad(); });
   }
 
   function renderChart(type) {
-    var def = find(type === "predios" ? "v_predios_cuenca_geojson" : "v_construcciones_cuenca_geojson");
-    if (!def || !def.data || !def.data.features.length) {
-      toast("Cargue la capa de " + (type === "predios" ? "Predios" : "Construcciones") + " primero", "error");
-      return;
-    }
-    var range = computeAreaRanges(def.data.features, "area");
-    if (chartInstance) chartInstance.destroy();
-    var ctx = document.getElementById("area-chart");
-    var colors = range.labels.map(function (_, i) {
-      var t = i / Math.max(range.labels.length - 1, 1);
-      return "rgba(" + Math.round(99 + t * 100) + "," + Math.round(102 + t * 50) + "," + Math.round(241 - t * 40) + ",0.8)";
-    });
-    chartInstance = new Chart(ctx, {
-      type: "bar",
-      data: {
-        labels: range.labels.map(function (l) { return l + " m\u00B2"; }),
-        datasets: [{
-          label: "Cantidad",
-          data: range.counts,
-          backgroundColor: colors,
-          borderColor: colors.map(function (c) { return c.replace("0.8", "1"); }),
-          borderWidth: 1,
-          borderRadius: 4,
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-          legend: { display: false },
-          title: { display: true, text: "Distribucion de Areas - " + (type === "predios" ? "Predios" : "Construcciones"), color: "#e4e4e7", font: { size: 14, weight: "600", family: "Inter" } },
-          tooltip: { backgroundColor: "rgba(15,15,35,0.95)", titleFont: { family: "Inter" }, bodyFont: { family: "Inter" } }
+    ensureLayerAndThen(type, function (def) {
+      var areas = getAreas(def.data.features);
+      var range = buildBins(areas);
+      if (range.total === 0) {
+        toast("No hay datos de area disponibles para " + def.nombre, "error");
+        return;
+      }
+      if (chartInstance) chartInstance.destroy();
+      var ctx = document.getElementById("area-chart");
+      var baseH = type === "predios" ? [99, 102, 241] : [239, 68, 68];
+      var colors = range.labels.map(function (_, i) {
+        var t = i / Math.max(range.labels.length - 1, 1);
+        return "rgba(" + Math.round(baseH[0] - t * 30) + "," + Math.round(baseH[1] + t * 60) + "," + Math.round(baseH[2] - t * 40) + ",0.8)";
+      });
+      chartInstance = new Chart(ctx, {
+        type: "bar",
+        data: {
+          labels: range.labels.map(function (l) { return l + " m\u00B2"; }),
+          datasets: [{ label: "Cantidad", data: range.counts, backgroundColor: colors, borderColor: colors.map(function (c) { return c.replace("0.8", "1"); }), borderWidth: 1, borderRadius: 4 }]
         },
-        scales: {
-          x: {
-            title: { display: true, text: "Rango de Area (m\u00B2)", color: "#a1a1aa", font: { family: "Inter", size: 11 } },
-            ticks: { color: "#a1a1aa", font: { family: "Inter", size: 9 }, maxRotation: 45 },
-            grid: { color: "rgba(255,255,255,0.04)" }
+        options: {
+          responsive: true, maintainAspectRatio: true,
+          plugins: {
+            legend: { display: false },
+            title: { display: true, text: "Distribucion de Areas - " + def.nombre, color: "#e4e4e7", font: { size: 14, weight: "600", family: "Inter" } },
+            tooltip: { backgroundColor: "rgba(15,15,35,0.95)", titleFont: { family: "Inter" }, bodyFont: { family: "Inter" } }
           },
-          y: {
-            title: { display: true, text: "Cantidad", color: "#a1a1aa", font: { family: "Inter", size: 11 } },
-            ticks: { color: "#a1a1aa", font: { family: "Inter", size: 10 } },
-            grid: { color: "rgba(255,255,255,0.04)" },
-            beginAtZero: true
+          scales: {
+            x: { title: { display: true, text: "Rango de Area (m\u00B2)", color: "#a1a1aa", font: { family: "Inter", size: 11 } }, ticks: { color: "#a1a1aa", font: { family: "Inter", size: 9 }, maxRotation: 45 }, grid: { color: "rgba(255,255,255,0.04)" } },
+            y: { title: { display: true, text: "Cantidad", color: "#a1a1aa", font: { family: "Inter", size: 11 } }, ticks: { color: "#a1a1aa", font: { family: "Inter", size: 10 } }, grid: { color: "rgba(255,255,255,0.04)" }, beginAtZero: true }
           }
         }
-      }
+      });
+      $("chart-summary").innerHTML =
+        '<span class="chart-stat"><strong>' + range.total.toLocaleString("es-EC") + '</strong> features con area</span>' +
+        '<span class="chart-stat">Promedio: <strong>' + range.avg.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
+        '<span class="chart-stat">Min: <strong>' + range.min.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
+        '<span class="chart-stat">Max: <strong>' + range.max.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
+        '<span class="chart-stat">Area total: <strong>' + range.sum.toLocaleString("es-EC") + ' m\u00B2</strong></span>';
     });
-    var sum = range.counts.reduce(function (s, v) { return s + v; }, 0);
-    $("chart-summary").innerHTML =
-      '<span class="chart-stat"><strong>' + range.total.toLocaleString("es-EC") + '</strong> features con area</span>' +
-      '<span class="chart-stat">Promedio: <strong>' + range.avg.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
-      '<span class="chart-stat">Min: <strong>' + range.min.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
-      '<span class="chart-stat">Max: <strong>' + range.max.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
-      '<span class="chart-stat">Total features: <strong>' + def.cnt.toLocaleString("es-EC") + '</strong></span>';
   }
 
   window.abrirGraficos = function () {
@@ -656,6 +688,202 @@
     document.querySelectorAll(".chart-tab").forEach(function (b) { b.classList.remove("active"); });
     if (btn) btn.classList.add("active");
     renderChart(tab);
+  };
+
+  /* ═══ RIVER PROTECTION MARGIN 50M ════════════════════════════ */
+  var riverMarginLayer = null;
+  var riverAffectedLayer = null;
+
+  function toRad(deg) { return deg * Math.PI / 180; }
+  function toDeg(rad) { return rad * 180 / Math.PI; }
+
+  function bufferLineMeters(coords, meters) {
+    var leftCoords = [], rightCoords = [];
+    for (var i = 0; i < coords.length - 1; i++) {
+      var lon1 = coords[i][0], lat1 = coords[i][1];
+      var lon2 = coords[i + 1][0], lat2 = coords[i + 1][1];
+      var dLon = toRad(lon2 - lon1), dLat = toRad(lat2 - lat1);
+      var brng = Math.atan2(Math.sin(dLon) * Math.cos(toRad(lat2)), Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon));
+      var leftBrng = brng - Math.PI / 2;
+      var rightBrng = brng + Math.PI / 2;
+      var dLatLeft = (meters / 6371000) * Math.cos(leftBrng);
+      var dLonLeft = (meters / 6371000) * Math.sin(leftBrng) / Math.cos(toRad(lat1));
+      var dLatRight = (meters / 6371000) * Math.cos(rightBrng);
+      var dLonRight = (meters / 6371000) * Math.sin(rightBrng) / Math.cos(toRad(lat1));
+      leftCoords.push([lon1 + dLonLeft, lat1 + dLatLeft]);
+      rightCoords.push([lon1 + dLonRight, lat1 + dLatRight]);
+      if (i === coords.length - 2) {
+        leftCoords.push([lon2 + dLonLeft, lat2 + dLatLeft]);
+        rightCoords.push([lon2 + dLonRight, lat2 + dLatRight]);
+      }
+    }
+    rightCoords.reverse();
+    return leftCoords.concat(rightCoords);
+  }
+
+  function polygonContainsPoint(ring, point) {
+    var inside = false;
+    for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      var xi = ring[i][0], yi = ring[i][1];
+      var xj = ring[j][0], yj = ring[j][1];
+      var intersect = ((yi > point[1]) !== (yj > point[1])) && (point[0] < (xj - xi) * (point[1] - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointInPolygon(point, polygon) {
+    if (polygon.type === "Polygon") return polygonContainsPoint(polygon.coordinates[0], point);
+    if (polygon.type === "MultiPolygon") {
+      for (var i = 0; i < polygon.coordinates.length; i++) {
+        if (polygonContainsPoint(polygon.coordinates[i][0], point)) return true;
+      }
+    }
+    return false;
+  }
+
+  function polygonIntersectsPolygon(geomA, geomB) {
+    var coordsA = geomA.type === "Polygon" ? [geomA.coordinates[0]] : geomA.coordinates;
+    var coordsB = geomB.type === "Polygon" ? [geomB.coordinates[0]] : geomB.coordinates;
+    for (var i = 0; i < coordsA.length; i++) {
+      for (var j = 0; j < coordsA[i].length; j++) {
+        if (polygonContainsPoint(coordsB[0], coordsA[i][j])) return true;
+      }
+    }
+    for (var i = 0; i < coordsB.length; i++) {
+      for (var j = 0; j < coordsB[i].length; j++) {
+        if (polygonContainsPoint(coordsA[0], coordsB[i][j])) return true;
+      }
+    }
+    return false;
+  }
+
+  window.calcularMargenes = function () {
+    var riosDef = find("v_rios_urbanos_cuenca_geojson");
+    var consDef = find("v_construcciones_cuenca_geojson");
+    if (!riosDef) { toast("Capa de rios no encontrada", "error"); return; }
+    if (!consDef) { toast("Capa de construcciones no encontrada", "error"); return; }
+
+    showLoad("Calculando margenes de proteccion (50m)...");
+
+    function doCalc() {
+      if (riverMarginLayer) { map.removeLayer(riverMarginLayer); riverMarginLayer = null; }
+      if (riverAffectedLayer) { map.removeLayer(riverAffectedLayer); riverAffectedLayer = null; }
+
+      var marginFeatures = [];
+      var affectedConstructions = [];
+      var totalRios = 0;
+
+      if (riosDef.data && riosDef.data.features) {
+        riosDef.data.features.forEach(function (f) {
+          if (!f.geometry) return;
+          totalRios++;
+          var coords = [];
+          if (f.geometry.type === "LineString") coords = f.geometry.coordinates;
+          else if (f.geometry.type === "MultiLineString") {
+            var longest = [];
+            f.geometry.coordinates.forEach(function (s) { if (s.length > longest.length) longest = s; });
+            coords = longest;
+          }
+          if (coords.length < 2) return;
+          var ring = bufferLineMeters(coords, 50);
+          if (ring.length >= 4) {
+            ring.push(ring[0]);
+            marginFeatures.push({ type: "Feature", properties: { nombre: f.properties.nombre || "Rio", tipo: "Margen 50m" }, geometry: { type: "Polygon", coordinates: [ring] } });
+          }
+        });
+      }
+
+      if (consDef.data && consDef.data.features) {
+        consDef.data.features.forEach(function (f) {
+          if (!f.geometry) return;
+          var centroid = featureCentroid(f.geometry);
+          var pt = [centroid.lng, centroid.lat];
+          for (var i = 0; i < marginFeatures.length; i++) {
+            if (pointInPolygon(pt, marginFeatures[i].geometry)) {
+              affectedConstructions.push(f);
+              break;
+            }
+          }
+        });
+      }
+
+      if (marginFeatures.length === 0) {
+        hideLoad();
+        toast("No se pudieron calcular margenes", "error");
+        return;
+      }
+
+      riverMarginLayer = L.geoJSON(
+        { type: "FeatureCollection", features: marginFeatures },
+        { style: { color: "#3b82f6", weight: 1, fillColor: "#3b82f6", fillOpacity: 0.15, dashArray: "5,5" }, interactive: false }
+      ).addTo(map);
+
+      if (affectedConstructions.length > 0) {
+        var affGeo = affectedConstructions.map(function (f) { return f.properties; });
+        riverAffectedLayer = L.geoJSON(
+          { type: "FeatureCollection", features: affectedConstructions },
+          {
+            style: { color: "#f59e0b", weight: 2, fillColor: "#f59e0b", fillOpacity: 0.4 },
+            onEachFeature: function (f, l) {
+              var p = f.properties || {};
+              var extra = '<div class="popup-actions"><div style="color:#f59e0b;font-size:0.75rem;font-weight:600">Dentro del margen de proteccion de 50m</div></div>';
+              l.bindPopup(mkPopup(consDef, p, extra), { maxWidth: 300, className: "info-popup" });
+            }
+          }
+        ).addTo(map);
+      }
+
+      hideLoad();
+      toast(affectedConstructions.length + " construcciones afectadas por margenes de 50m (" + totalRios + " rios analizados)", "success");
+
+      var panel = $("river-margin-info");
+      if (panel) {
+        panel.innerHTML = '<div class="river-margin-result">' +
+          '<div class="rm-stat"><strong>' + marginFeatures.length + '</strong> poligonos de margen</div>' +
+          '<div class="rm-stat"><strong>' + affectedConstructions.length + '</strong> construcciones afectadas</div>' +
+          '<div class="rm-stat"><strong>' + totalRios + '</strong> rios analizados</div>' +
+          '<button class="btn-rm-clear" onclick="limpiarMargenes()">Limpiar margenes</button>' +
+          '</div>';
+        panel.style.display = "block";
+      }
+    }
+
+    if (!riosDef.data) {
+      cargar(riosDef).then(function () {
+        addToMap(riosDef);
+        var el = $("tog-" + riosDef.id); if (el) el.classList.add("active");
+        if (!consDef.data) {
+          return cargar(consDef).then(function () {
+            addToMap(consDef);
+            var el2 = $("tog-" + consDef.id); if (el2) el2.classList.add("active");
+            refreshUI();
+          });
+        }
+      }).then(doCalc).catch(function (e) {
+        hideLoad();
+        toast("Error cargando capas: " + e.message, "error");
+      });
+    } else if (!consDef.data) {
+      cargar(consDef).then(function () {
+        addToMap(consDef);
+        var el = $("tog-" + consDef.id); if (el) el.classList.add("active");
+        refreshUI();
+      }).then(doCalc).catch(function (e) {
+        hideLoad();
+        toast("Error cargando construcciones: " + e.message, "error");
+      });
+    } else {
+      doCalc();
+    }
+  };
+
+  window.limpiarMargenes = function () {
+    if (riverMarginLayer) { map.removeLayer(riverMarginLayer); riverMarginLayer = null; }
+    if (riverAffectedLayer) { map.removeLayer(riverAffectedLayer); riverAffectedLayer = null; }
+    var panel = $("river-margin-info");
+    if (panel) { panel.innerHTML = ""; panel.style.display = "none"; }
+    toast("Margenes limpiados", "info");
   };
 
   /* ═══ STATUS CHANGE ═══════════════════════════════════════════ */

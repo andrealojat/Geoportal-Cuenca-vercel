@@ -281,6 +281,22 @@ body{
 }
 
 .btn-chart{margin-top:-6px}
+.btn-river{background:linear-gradient(135deg,rgba(59,130,246,0.15),rgba(59,130,246,0.05))!important;border-color:rgba(59,130,246,0.25)!important;color:#3b82f6!important}
+.btn-river:hover{background:linear-gradient(135deg,rgba(59,130,246,0.25),rgba(59,130,246,0.10))!important;border-color:rgba(59,130,246,0.45)!important}
+
+#river-margin-info{display:none;margin-top:-4px}
+.river-margin-result{
+  padding:10px;border-radius:8px;
+  background:rgba(59,130,246,0.06);border:1px solid rgba(59,130,246,0.15);
+}
+.rm-stat{font-size:0.7rem;color:var(--text-secondary);margin-bottom:4px}
+.rm-stat strong{color:var(--accent);font-weight:700}
+.btn-rm-clear{
+  margin-top:6px;width:100%;padding:6px;border:none;border-radius:6px;
+  background:rgba(239,68,68,0.1);color:#ef4444;font-size:0.7rem;font-weight:600;
+  font-family:'Inter',sans-serif;cursor:pointer;transition:all 0.2s;
+}
+.btn-rm-clear:hover{background:rgba(239,68,68,0.2)}
 
 .chart-modal{
   display:none;position:fixed;top:0;left:0;width:100%;height:100%;
