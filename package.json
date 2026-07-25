@@ -1,0 +1,10 @@
+{
+  "name": "geoportal-cuenca-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Geoportal Cuenca - Deploy en Vercel con API proxy",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  }
+}

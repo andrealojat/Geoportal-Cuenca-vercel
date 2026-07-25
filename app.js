@@ -1,0 +1,565 @@
+(function () {
+  "use strict";
+  var PS = 1000;
+  var LY = [
+    { id: "v_limite_cuenca_geojson", nombre: "Limite Cuenca", vista: "v_limite_cuenca_geojson", gf: "geometry", tipo: "polygon",
+      auto: true, activo: false, data: null, lyr: null, cnt: 0,
+      pop: [["parroquia", "Parroquia"]], sty: { color: "#ef4444", weight: 3, fillOpacity: 0 },
+      svg: '<svg width="20" height="14"><rect x="1" y="1" width="18" height="12" fill="none" stroke="#ef4444" stroke-width="2"/></svg>' },
+    { id: "v_rios_urbanos_cuenca_geojson", nombre: "Rios Urbanos", vista: "v_rios_urbanos_cuenca_geojson", gf: "geometry", tipo: "line",
+      auto: true, activo: false, data: null, lyr: null, cnt: 0,
+      pop: [["nombre", "Nombre"], ["tipo", "Tipo"], ["long_km", "Longitud (km)"]], sty: { color: "#3b82f6", weight: 3, fillOpacity: 0 },
+      svg: '<svg width="20" height="14"><line x1="1" y1="7" x2="19" y2="7" stroke="#3b82f6" stroke-width="3"/></svg>' },
+    { id: "v_vias_urbanas_cuenca_geojson", nombre: "Vias Urbanas", vista: "v_vias_urbanas_cuenca_geojson", gf: "geometry", tipo: "line",
+      auto: true, activo: false, data: null, lyr: null, cnt: 0,
+      pop: [["nombre", "Nombre"], ["tipo", "Via"], ["codvia", "Codigo"]], sty: { color: "#c97b3a", weight: 2 },
+      svg: '<svg width="20" height="14"><line x1="1" y1="7" x2="19" y2="7" stroke="#c97b3a" stroke-width="2"/></svg>' },
+    { id: "v_predios_cuenca_geojson", nombre: "Predios", vista: "v_predios_cuenca_geojson", gf: "geometry", tipo: "polygon",
+      auto: false, activo: false, data: null, lyr: null, cnt: 0,
+      pop: [["clave", "Clave Catastral"], ["area", "Area (m\u00B2)"]], sty: { color: "#a1a1aa", weight: 0.8, fillOpacity: 0.1, fillColor: "#a1a1aa" },
+      svg: '<svg width="20" height="14"><rect x="1" y="1" width="18" height="12" fill="#a1a1aa" fill-opacity="0.15" stroke="#a1a1aa"/></svg>' },
+    { id: "v_construcciones_cuenca_geojson", nombre: "Construcciones", vista: "v_construcciones_cuenca_geojson", gf: "geometry", tipo: "polygon",
+      auto: true, activo: false, data: null, lyr: null, cnt: 0,
+      pop: [["gid", "ID"], ["clave", "Clave"], ["bloque", "Bloque"]], sty: { color: "#ef4444", weight: 1, fillOpacity: 0.25, fillColor: "#ef4444" },
+      svg: '<svg width="20" height="14"><rect x="1" y="1" width="18" height="12" fill="#ef4444" fill-opacity="0.2" stroke="#ef4444"/></svg>' },
+    { id: "reportes_ciudadanos", nombre: "Reportes Ciudadanos", vista: "reportes_ciudadanos", gf: "geom", tipo: "point",
+      auto: true, activo: false, data: null, lyr: null, cnt: 0,
+      pop: [["tipo", "Tipo"], ["descripcion", "Comentario"], ["nombre", "Reportado por"], ["fecha", "Fecha"], ["estado", "Estado"]],
+      sty: null, svg: '<svg width="20" height="14"><circle cx="10" cy="7" r="5" fill="#f59e0b" stroke="white" stroke-width="1.5"/></svg>' },
+    { id: "v_reportes_construcciones_geojson", nombre: "Reportes Construcciones", vista: "v_reportes_construcciones_geojson", gf: "geometry", tipo: "point",
+      auto: false, activo: false, data: null, lyr: null, cnt: 0,
+      pop: [["id_construccion", "ID Construccion"], ["clave_construccion", "Clave"], ["bloque", "Bloque"], ["estado_observado", "Estado"], ["prioridad", "Prioridad"], ["comentario", "Comentario"], ["fecha_reporte", "Fecha"]],
+      sty: null, svg: '<svg width="20" height="14"><circle cx="10" cy="7" r="5" fill="#f97316" stroke="white" stroke-width="1.5"/></svg>' }
+  ];
+  var map, baseDark, baseSat, baseOsm, curBase = "dark";
+  var rioTips = [], rptMarker = null, rptMap = null;
+  var reportedGids = {}, construccionHighlightLayer = null;
+  var PRIO_COLORS = { "Baja": "#22c55e", "Media": "#f97316", "Alta": "#ef4444" };
+  function $(id) { return document.getElementById(id); }
+  function toast(msg, type) {
+    var t = $("toast"); if (!t) return;
+    t.textContent = msg; t.className = "toast show " + (type || "info");
+    setTimeout(function () { t.className = "toast"; }, 3000);
+  }
+  function showLoad(txt) {
+    var lt = $("loading-text"), o = $("loading-overlay");
+    if (lt) lt.textContent = txt || "Cargando...";
+    if (o) o.classList.add("show");
+  }
+  function hideLoad() { var o = $("loading-overlay"); if (o) o.classList.remove("show"); }
+  var cancelFn = null;
+  window.cancelLoad = function () { if (cancelFn) cancelFn(); hideLoad(); };
+  function fmtNum(v) { return v == null ? "\u2014" : Number(v).toLocaleString("es-EC"); }
+  function fmtDate(v) {
+    if (!v) return "\u2014";
+    var d = new Date(v); if (isNaN(d.getTime())) return "\u2014";
+    var m = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+    return m[m[d.getMonth()]] + " " + d.getDate() + ", " + d.getFullYear() + " " +
+      ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  function find(id) { var r = null; LY.forEach(function (l) { if (l.id === id) r = l; }); return r; }
+  function featureCentroid(geometry) {
+    var coords = geometry.coordinates, cx = 0, cy = 0, n = 0;
+    if (geometry.type === "Polygon") {
+      coords[0].forEach(function (c) { cx += c[0]; cy += c[1]; n++; });
+    } else if (geometry.type === "MultiPolygon") {
+      coords.forEach(function (p) { p[0].forEach(function (c) { cx += c[0]; cy += c[1]; n++; }); });
+    }
+    if (n > 0) { cx /= n; cy /= n; }
+    return { lat: cy, lng: cx };
+  }
+  map = L.map("map", { preferCanvas: true, center: [-2.9001, -79.0059], zoom: 13 });
+  baseDark = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+    attribution: "\u00A9 CARTO \u00A9 OSM", maxZoom: 19 });
+  baseSat = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+    attribution: "\u00A9 Esri", maxZoom: 18 });
+  baseOsm = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "\u00A9 OSM", maxZoom: 19 });
+  baseDark.addTo(map);
+  var bases = { dark: baseDark, satellite: baseSat, osm: baseOsm };
+  map.on("mousemove", function (e) {
+    $("coords-info").innerHTML = "Lat: " + e.latlng.lat.toFixed(5) + " | Lon: " + e.latlng.lng.toFixed(5) + " | Zoom: " + map.getZoom();
+  });
+  map.on("zoomend", function () {
+    var z = map.getZoom(), rios = find("v_rios_urbanos_cuenca_geojson");
+    rioTips.forEach(function (t) {
+      if (z >= 15 && rios && rios.activo) { if (!map.hasLayer(t)) t.addTo(map); }
+      else { if (map.hasLayer(t)) map.removeLayer(t); }
+    });
+  });
+  window.switchBasemap = function (name, btn) {
+    map.removeLayer(bases[curBase]); bases[name].addTo(map); curBase = name;
+    document.querySelectorAll(".basemap-btn").forEach(function (b) { b.classList.remove("active"); });
+    btn.classList.add("active");
+  };
+  function mkPopup(def, p, extra) {
+    var h = '<div class="popup-header"><span class="popup-icon">' + def.svg + '</span><span class="popup-layer">' + def.nombre + '</span></div><div class="popup-body">';
+    def.pop.forEach(function (f) {
+      var k = f[0], lb = f[1], v = p[k];
+      if (v == null || v === "") v = "\u2014";
+      else if (k === "area") v = fmtNum(v) + " m\u00B2";
+      else if (k === "long_km") v = fmtNum(v) + " km";
+      else if (k === "fecha" || k === "fecha_reporte") v = fmtDate(v);
+      else if (k === "estado" || k === "estado_observado") v = String(v).charAt(0).toUpperCase() + String(v).slice(1);
+      else if (typeof v === "number") v = fmtNum(v);
+      h += "<div class='popup-field'><div class='popup-label'>" + lb + "</div><div class='popup-value'>" + v + "</div></div>";
+    });
+    return h + (extra || "") + "</div>";
+  }
+  var PT_STYLE = { radius: 8, fillColor: "#f59e0b", color: "white", weight: 2.5, fillOpacity: 0.9 };
+  function mkStyle(def) {
+    return function (f) {
+      if (f && f.geometry && f.geometry.type === "Point") return {};
+      return def.sty || {};
+    };
+  }
+  function cargar(def, onBatch) {
+    showLoad("Cargando " + def.nombre + "...");
+    var aborted = false;
+    cancelFn = function () { aborted = true; };
+    var all = [], off = 0;
+    function pg() {
+      if (aborted) return Promise.resolve();
+      var page = Math.floor(off / PS) + 1;
+      var lt = $("loading-text");
+      if (lt) lt.textContent = def.nombre + ": pagina " + page + " (" + all.length.toLocaleString("es-EC") + " registros)..."
+      var u = "/api/layer?v=" + encodeURIComponent(def.vista) + "&limit=" + PS + "&offset=" + off;
+      return fetch(u).then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status + " en " + def.vista);
+        return r.json();
+      }).then(function (rows) {
+        if (!rows || !rows.length) return;
+        rows.forEach(function (row) {
+          var g = row[def.gf]; if (!g) return;
+          if (typeof g === "string") { try { g = JSON.parse(g); } catch (e) { return; } }
+          var props = {}; for (var k in row) { if (k !== def.gf) props[k] = row[k]; }
+          all.push({ type: "Feature", properties: props, geometry: g });
+        });
+        if (rows.length === PS) { off += PS; return pg(); }
+      });
+    }
+    return pg().then(function () {
+      def.data = { type: "FeatureCollection", features: all }; def.cnt = all.length;
+      if (onBatch) onBatch(def);
+    }).catch(function (e) {
+      if (aborted) { toast("Carga cancelada", "error"); }
+      else { toast("Error cargando " + def.nombre + ": " + e.message, "error"); }
+      def.data = { type: "FeatureCollection", features: [] }; def.cnt = 0;
+    });
+  }
+  function mkRioLabels(feats) {
+    var seen = {};
+    feats.forEach(function (f) {
+      var n = f.properties.nombre; if (!n || seen[n]) return; seen[n] = true;
+      var g = f.geometry; if (!g) return;
+      var coords = [];
+      if (g.type === "LineString") coords = g.coordinates;
+      else if (g.type === "MultiLineString") {
+        var mx = 0; g.coordinates.forEach(function (s) { if (s.length > mx) { mx = s.length; coords = s; } });
+      }
+      if (coords.length < 2) return;
+      var mid = coords[Math.floor(coords.length / 2)];
+      var tip = L.tooltip({ permanent: false, direction: "center", className: "rio-label" })
+        .setLatLng([mid[1], mid[0]]).setContent(n);
+      rioTips.push(tip);
+    });
+  }
+  function clearRioLabels() {
+    rioTips.forEach(function (t) { if (map.hasLayer(t)) map.removeLayer(t); }); rioTips = [];
+  }
+  var RPT_COLORS = {
+    "Bache en via": "#ef4444", "Alumbrado danado": "#eab308", "Basura acumulada": "#22c55e",
+    "Inundacion": "#3b82f6", "Deslizamiento": "#a855f7", "Vandalismo": "#ec4899",
+    "Arbol caido": "#10b981", "Tapa alcantarilla": "#6b7280", "Fuga de agua": "#06b6d4",
+    "Parque deteriorado": "#14b8a6", "Senalizacion": "#f97316", "Otro": "#94a3b8"
+  };
+  function rptColor(tipo) { return RPT_COLORS[tipo] || "#f59e0b"; }
+
+  function addToMap(def) {
+    if (def.tipo === "point") {
+      if (def.id === "reportes_ciudadanos") {
+        def.lyr = L.geoJSON(def.data, {
+          pointToLayer: function (f, ll) {
+            var c = rptColor(f.properties && f.properties.tipo);
+            return L.circleMarker(ll, { radius: 8, fillColor: c, color: "#fff", weight: 2, fillOpacity: 0.9 });
+          },
+          onEachFeature: function (f, l) { l.bindPopup(mkPopup(def, f.properties), { maxWidth: 300, className: "info-popup" }); }
+        }).addTo(map);
+      } else if (def.id === "v_reportes_construcciones_geojson") {
+        def.lyr = L.geoJSON(def.data, {
+          pointToLayer: function (f, ll) {
+            var c = PRIO_COLORS[f.properties && f.properties.prioridad] || "#f97316";
+            return L.circleMarker(ll, { radius: 8, fillColor: c, color: "#fff", weight: 2, fillOpacity: 0.9 });
+          },
+          onEachFeature: function (f, l) { l.bindPopup(mkPopup(def, f.properties), { maxWidth: 300, className: "info-popup" }); }
+        }).addTo(map);
+        buildReportedGids();
+      } else {
+        def.lyr = L.geoJSON(def.data, {
+          pointToLayer: function (f, ll) { return L.circleMarker(ll, PT_STYLE); },
+          style: function () { return {}; },
+          onEachFeature: function (f, l) { l.bindPopup(mkPopup(def, f.properties), { maxWidth: 300, className: "info-popup" }); }
+        }).addTo(map);
+      }
+    } else if (def.id === "v_construcciones_cuenca_geojson") {
+      def.lyr = L.geoJSON(def.data, {
+        style: mkStyle(def),
+        onEachFeature: function (f, l) {
+          var center = featureCentroid(f.geometry);
+          var gid = f.properties.gid != null ? f.properties.gid : "";
+          var clave = f.properties.clave || "";
+          var bloque = f.properties.bloque || "";
+          var extra = '<div class="popup-actions"><button class="popup-report-btn" onclick="reportarConstruccion(\'' + gid + '\',\'' + clave + '\',\'' + bloque + '\',' + center.lat + ',' + center.lng + ')">Reportar esta construcci\u00f3n</button></div>';
+          l.bindPopup(mkPopup(def, f.properties, extra), { maxWidth: 300, className: "info-popup" });
+        }
+      }).addTo(map);
+      updateConstruccionHighlight();
+    } else {
+      def.lyr = L.geoJSON(def.data, {
+        style: mkStyle(def),
+        onEachFeature: function (f, l) { l.bindPopup(mkPopup(def, f.properties), { maxWidth: 300, className: "info-popup" }); }
+      }).addTo(map);
+    }
+    def.activo = true;
+    if (def.id === "v_rios_urbanos_cuenca_geojson") mkRioLabels(def.data.features);
+  }
+
+  function buildReportedGids() {
+    reportedGids = {};
+    var rc = find("v_reportes_construcciones_geojson");
+    if (rc && rc.data && rc.data.features) {
+      rc.data.features.forEach(function (f) {
+        var gid = f.properties && f.properties.id_construccion;
+        if (gid != null) reportedGids[String(gid)] = true;
+      });
+    }
+  }
+
+  function updateConstruccionHighlight() {
+    if (construccionHighlightLayer) {
+      map.removeLayer(construccionHighlightLayer);
+      construccionHighlightLayer = null;
+    }
+    var cDef = find("v_construcciones_cuenca_geojson");
+    if (!cDef || !cDef.activo || !cDef.data) return;
+    buildReportedGids();
+    var gids = Object.keys(reportedGids);
+    if (gids.length === 0) return;
+    var highlightFeatures = cDef.data.features.filter(function (f) {
+      return f.properties && f.properties.gid != null && reportedGids[String(f.properties.gid)];
+    });
+    if (highlightFeatures.length === 0) return;
+    construccionHighlightLayer = L.geoJSON(
+      { type: "FeatureCollection", features: highlightFeatures },
+      { style: { color: "#f59e0b", weight: 3, fillOpacity: 0, dashArray: "6,4" }, interactive: false }
+    ).addTo(map);
+  }
+
+  function refreshUI() { updateStats(); updateLegend(); updateAttrSel(); }
+  window.toggleLayer = function (el) {
+    var def = find(el.getAttribute("data-layer")); if (!def) return;
+    var tog = $("tog-" + def.id);
+    if (def.activo) {
+      if (def.lyr) { map.removeLayer(def.lyr); def.lyr = null; }
+      def.activo = false; el.classList.remove("active");
+      if (tog) tog.classList.remove("active");
+      if (def.id === "v_rios_urbanos_cuenca_geojson") clearRioLabels();
+      if (def.id === "v_construcciones_cuenca_geojson" || def.id === "v_reportes_construcciones_geojson") {
+        updateConstruccionHighlight();
+      }
+    } else {
+      if (!def.data) {
+        cargar(def).then(function () {
+          try { addToMap(def); } catch(e) {}
+          el.classList.add("active"); if (tog) tog.classList.add("active");
+          refreshUI();
+        }).finally(function(){ hideLoad(); });
+        return;
+      }
+      addToMap(def); el.classList.add("active");
+      if (tog) tog.classList.add("active");
+    }
+    refreshUI();
+  };
+  function updateStats() {
+    var act = LY.filter(function (l) { return l.activo; });
+    $("stat-layers").textContent = act.length;
+    var tot = 0; act.forEach(function (l) { tot += l.cnt; });
+    $("stat-features").textContent = tot.toLocaleString("es-EC");
+    LY.forEach(function (l) { var e = $("count-" + l.id); if (e) e.textContent = l.cnt.toLocaleString("es-EC"); });
+  }
+  function updateLegend() {
+    var h = "", seenReports = false, seenRC = false;
+    LY.forEach(function (l) {
+      if (!l.activo) return;
+      if (l.id === "reportes_ciudadanos") {
+        h += '<div class="legend-section">Reportes Ciudadanos</div>';
+        var used = {};
+        if (l.data && l.data.features) l.data.features.forEach(function (f) {
+          var t = f.properties && f.properties.tipo; if (!t || used[t]) return; used[t] = true;
+          h += '<div class="legend-item"><span class="legend-symbol point" style="background:' + rptColor(t) + ';border:2px solid white;"></span> ' + t + "</div>";
+        });
+        if (Object.keys(used).length === 0) h += '<div class="legend-item"><span class="legend-symbol point" style="background:#f59e0b;border:2px solid white;"></span> Sin datos</div>';
+        seenReports = true;
+      } else if (l.id === "v_reportes_construcciones_geojson") {
+        h += '<div class="legend-section">Reportes Construcciones</div>';
+        var pUsed = {};
+        if (l.data && l.data.features) l.data.features.forEach(function (f) {
+          var p = f.properties && f.properties.prioridad; if (!p || pUsed[p]) return; pUsed[p] = true;
+          h += '<div class="legend-item"><span class="legend-symbol point" style="background:' + (PRIO_COLORS[p] || "#f97316") + ';border:2px solid white;"></span> ' + p + "</div>";
+        });
+        if (Object.keys(pUsed).length === 0) h += '<div class="legend-item"><span class="legend-symbol point" style="background:#f97316;border:2px solid white;"></span> Sin datos</div>';
+        seenRC = true;
+      } else if (l.tipo === "point")
+        h += '<div class="legend-item"><span class="legend-symbol point" style="background:#f59e0b;border:2px solid white;"></span> ' + l.nombre + "</div>";
+      else if (l.tipo === "line")
+        h += '<div class="legend-item"><span class="legend-symbol" style="background:' + l.sty.color + ';"></span> ' + l.nombre + "</div>";
+      else
+        h += '<div class="legend-item"><span class="legend-symbol polygon" style="background:' + l.sty.color + ';"></span> ' + l.nombre + "</div>";
+    });
+    $("legend-items").innerHTML = h;
+    var lg = $("legend"); if (lg) { lg.className = h ? "legend show" : "legend"; }
+  }
+  function updateAttrSel() {
+    var s = $("attr-layer-select"), cv = s.value; s.innerHTML = "";
+    LY.forEach(function (l) {
+      if (!l.activo) return;
+      var o = document.createElement("option"); o.value = l.id; o.textContent = l.nombre; s.appendChild(o);
+    });
+    if (cv) s.value = cv;
+  }
+  window.loadAttrTable = function () {
+    var s = $("attr-layer-select"), def = find(s.value);
+    if (!def || !def.data) return;
+    var feats = def.data.features.slice(0, 50);
+    var keys = feats.length > 0 ? Object.keys(feats[0].properties) : [];
+    var h = "<table class='attr-table'><thead><tr>";
+    keys.forEach(function (k) { h += "<th>" + k + "</th>"; });
+    h += "<th>Ver</th></tr></thead><tbody>";
+    feats.forEach(function (f, i) {
+      h += "<tr data-idx='" + i + "'>";
+      keys.forEach(function (k) { h += "<td>" + (f.properties[k] != null ? f.properties[k] : "\u2014") + "</td>"; });
+      h += "<td><button class='btn-sm' onclick='zoomToFeature(\"" + def.id + "\"," + i + ")'>Ver</button></td></tr>";
+    });
+    h += "</tbody></table>";
+    if (def.data.features.length > 50) h += "<div class='attr-note'>Mostrando 50 de " + def.data.features.length + " registros</div>";
+    $("attr-table-container").innerHTML = h;
+  };
+  window.zoomToFeature = function (lid, idx) {
+    var def = find(lid); if (!def || !def.data) return;
+    var f = def.data.features[idx]; if (!f) return;
+    var tmp = L.geoJSON(f); map.fitBounds(tmp.getBounds().pad(0.2)); tmp.remove();
+    if (def.lyr) def.lyr.eachLayer(function (l) { if (l.feature === f) l.openPopup(); });
+  };
+  window.filterAttrTable = function () {
+    var q = $("attr-search").value.toLowerCase();
+    $("attr-table-container").querySelectorAll("tbody tr").forEach(function (r) {
+      r.style.display = r.textContent.toLowerCase().indexOf(q) >= 0 ? "" : "none";
+    });
+  };
+
+  function initRptMap() {
+    rptMap = L.map("report-form-map", { preferCanvas: true, center: [-2.9001, -79.0059], zoom: 14 });
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 19 }).addTo(rptMap);
+    rptMap.on("click", function (e) {
+      if (rptMarker) rptMap.removeLayer(rptMarker);
+      rptMarker = L.circleMarker(e.latlng, { radius: 8, fillColor: "#ef4444", color: "white", weight: 2, fillOpacity: 0.9 }).addTo(rptMap);
+      $("rpt-lat").value = e.latlng.lat.toFixed(6);
+      $("rpt-lon").value = e.latlng.lng.toFixed(6);
+      var st = $("report-location-status"), tx = $("report-location-text");
+      if (st) st.className = "report-status set";
+      if (tx) tx.textContent = "Ubicacion: " + e.latlng.lat.toFixed(5) + ", " + e.latlng.lng.toFixed(5);
+      validateRptForm();
+    });
+  }
+  window.toggleReportPanel = function () {
+    var p = $("report-panel"); if (!p) return;
+    p.classList.toggle("open");
+    if (p.classList.contains("open")) {
+      setTimeout(function () { rptMap && rptMap.invalidateSize(); }, 400);
+    }
+  };
+  window.enviarReporte = function () {
+    var tipo = $("rpt-tipo").value, desc = $("rpt-comentario").value.trim();
+    var lat = parseFloat($("rpt-lat").value), lon = parseFloat($("rpt-lon").value);
+    if (!tipo) { toast("Seleccione un tipo de reporte", "error"); return; }
+    if (isNaN(lat) || isNaN(lon)) { toast("Seleccione una ubicacion en el mapa", "error"); return; }
+    if (desc.length < 10) { toast("El comentario debe tener al menos 10 caracteres", "error"); return; }
+    fetch("/api/report-ciudadano", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tipo: tipo, descripcion: desc, lat: lat, lon: lon })
+    }).then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); })
+      .then(function () {
+        toast("Reporte enviado exitosamente", "success");
+        var rm = $("report-message");
+        if (rm) { rm.innerHTML = "Reporte enviado correctamente"; rm.className = "report-message success"; }
+        limpiarReporte();
+        var def = find("reportes_ciudadanos");
+        if (def && def.activo) {
+          map.removeLayer(def.lyr); def.lyr = null; def.activo = false; def.data = null;
+          cargar(def).then(function () {
+            try { addToMap(def); } catch(e) {}
+            var el = $("tog-reportes_ciudadanos");
+            if (el) el.classList.add("active"); refreshUI();
+          }).finally(function(){ hideLoad(); });
+        }
+      }).catch(function (e) {
+        toast("Error al enviar: " + e.message, "error");
+        var rm = $("report-message");
+        if (rm) { rm.innerHTML = "Error al enviar el reporte"; rm.className = "report-message error"; }
+      });
+  };
+  window.limpiarReporte = function () {
+    if ($("rpt-tipo")) $("rpt-tipo").value = "";
+    if ($("rpt-comentario")) $("rpt-comentario").value = "";
+    if ($("rpt-lat")) $("rpt-lat").value = "";
+    if ($("rpt-lon")) $("rpt-lon").value = "";
+    var cc = $("rpt-charcount"); if (cc) { cc.textContent = "0"; cc.className = "char-count"; }
+    var st = $("report-location-status"), tx = $("report-location-text");
+    if (st) st.className = "report-status";
+    if (tx) tx.textContent = "Haz clic en el mapa para ubicar el reporte";
+    var rm = $("report-message"); if (rm) { rm.innerHTML = ""; rm.className = "report-message"; }
+    if (rptMarker && rptMap) { rptMap.removeLayer(rptMarker); rptMarker = null; }
+    var btn = $("btn-rpt-submit"); if (btn) btn.disabled = true;
+  };
+  function validateRptForm() {
+    var tipo = $("rpt-tipo").value;
+    var desc = $("rpt-comentario").value.trim();
+    var lat = $("rpt-lat").value;
+    var valid = tipo && lat && desc.length >= 10;
+    var btn = $("btn-rpt-submit"); if (btn) btn.disabled = !valid;
+  }
+  if ($("rpt-tipo")) $("rpt-tipo").addEventListener("change", validateRptForm);
+  if ($("rpt-comentario")) {
+    $("rpt-comentario").addEventListener("input", function () {
+      var n = this.value.length, cc = $("rpt-charcount");
+      if (cc) { cc.textContent = n; cc.className = n >= 10 ? "char-count valid" : "char-count invalid"; }
+      validateRptForm();
+    });
+  }
+
+  /* ═══ REPORTE CONSTRUCCIONES ═══════════════════════════════ */
+  window.reportarConstruccion = function (gid, clave, bloque, lat, lon) {
+    map.closePopup();
+    if ($("rc-id")) $("rc-id").value = gid || "";
+    if ($("rc-clave")) $("rc-clave").value = clave || "";
+    if ($("rc-bloque")) $("rc-bloque").value = bloque || "";
+    if ($("rc-lat")) $("rc-lat").value = lat != null ? Number(lat).toFixed(6) : "";
+    if ($("rc-lon")) $("rc-lon").value = lon != null ? Number(lon).toFixed(6) : "";
+    var st = $("rc-location-status"), tx = $("rc-location-text");
+    if (st) st.className = "report-status set";
+    if (tx) tx.textContent = "Construccion: " + (clave || gid) + (bloque ? " / " + bloque : "");
+    var p = $("construccion-report-panel");
+    if (p) p.classList.add("open");
+    validateConstruccionForm();
+  };
+  window.toggleConstruccionReportPanel = function () {
+    var p = $("construccion-report-panel"); if (!p) return;
+    p.classList.toggle("open");
+  };
+  function validateConstruccionForm() {
+    var estado = $("rc-estado").value;
+    var prioridad = $("rc-prioridad").value;
+    var desc = $("rc-comentario").value.trim();
+    var lat = $("rc-lat").value;
+    var valid = estado && prioridad && lat && desc.length >= 10;
+    var btn = $("btn-rc-submit"); if (btn) btn.disabled = !valid;
+  }
+  window.enviarReporteConstruccion = function () {
+    var idCons = $("rc-id").value;
+    var clave = $("rc-clave").value;
+    var bloque = $("rc-bloque").value;
+    var estado = $("rc-estado").value;
+    var prioridad = $("rc-prioridad").value;
+    var comentario = $("rc-comentario").value.trim();
+    var lat = parseFloat($("rc-lat").value);
+    var lon = parseFloat($("rc-lon").value);
+    if (!estado) { toast("Seleccione el estado observado", "error"); return; }
+    if (!prioridad) { toast("Seleccione la prioridad", "error"); return; }
+    if (comentario.length < 10) { toast("El comentario debe tener al menos 10 caracteres", "error"); return; }
+    if (isNaN(lat) || isNaN(lon)) { toast("Ubicacion no disponible", "error"); return; }
+    var payload = { id_construccion: idCons || null, clave_construccion: clave || null, bloque: bloque || null, estado_observado: estado, prioridad: prioridad, comentario: comentario, lat: lat, lon: lon };
+    showLoad("Enviando reporte...");
+    fetch("/api/report-construccion", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(function (r) {
+        if (!r.ok) return r.text().then(function (t) { throw new Error("HTTP " + r.status + ": " + t); });
+        return r.json();
+      })
+      .then(function (data) {
+        hideLoad();
+        toast("Reporte de construccion enviado", "success");
+        var rm = $("rc-message");
+        if (rm) { rm.innerHTML = "Reporte enviado correctamente"; rm.className = "report-message success"; }
+        limpiarReporteConstruccion();
+        var def = find("v_reportes_construcciones_geojson");
+        if (def) {
+          if (def.activo && def.lyr) { map.removeLayer(def.lyr); }
+          def.lyr = null; def.activo = false; def.data = null;
+          cargar(def).then(function () {
+            addToMap(def);
+            var el = $("tog-v_reportes_construcciones_geojson");
+            if (el) el.classList.add("active");
+            var card = document.querySelector('[data-layer="v_reportes_construcciones_geojson"]');
+            if (card) card.classList.add("active");
+            updateConstruccionHighlight();
+            refreshUI();
+          }).catch(function(e){ console.error("RC reload error:", e); }).finally(function(){ hideLoad(); });
+        }
+      }).catch(function (e) {
+        hideLoad();
+        console.error("RC insert error:", e);
+        toast("Error al enviar: " + e.message, "error");
+        var rm = $("rc-message");
+        if (rm) { rm.innerHTML = "Error al enviar el reporte: " + e.message; rm.className = "report-message error"; }
+      });
+  };
+  window.limpiarReporteConstruccion = function () {
+    if ($("rc-id")) $("rc-id").value = "";
+    if ($("rc-clave")) $("rc-clave").value = "";
+    if ($("rc-bloque")) $("rc-bloque").value = "";
+    if ($("rc-lat")) $("rc-lat").value = "";
+    if ($("rc-lon")) $("rc-lon").value = "";
+    if ($("rc-estado")) $("rc-estado").value = "";
+    if ($("rc-prioridad")) $("rc-prioridad").value = "";
+    if ($("rc-comentario")) $("rc-comentario").value = "";
+    var cc = $("rc-charcount"); if (cc) { cc.textContent = "0"; cc.className = "char-count"; }
+    var st = $("rc-location-status"), tx = $("rc-location-text");
+    if (st) st.className = "report-status";
+    if (tx) tx.textContent = "Seleccion\u00f3 una construcci\u00f3n en el mapa";
+    var rm = $("rc-message"); if (rm) { rm.innerHTML = ""; rm.className = "report-message"; }
+    var btn = $("btn-rc-submit"); if (btn) btn.disabled = true;
+  };
+  if ($("rc-estado")) $("rc-estado").addEventListener("change", validateConstruccionForm);
+  if ($("rc-prioridad")) $("rc-prioridad").addEventListener("change", validateConstruccionForm);
+  if ($("rc-comentario")) {
+    $("rc-comentario").addEventListener("input", function () {
+      var n = this.value.length, cc = $("rc-charcount");
+      if (cc) { cc.textContent = n; cc.className = n >= 10 ? "char-count valid" : "char-count invalid"; }
+      validateConstruccionForm();
+    });
+  }
+
+  /* ═══ INIT ═════════════════════════════════════════════════ */
+  showLoad("Inicializando geoportal...");
+  var autoLayers = LY.filter(function (l) { return l.auto; });
+  var loaded = 0;
+  var initPromises = autoLayers.map(function (l) {
+    return cargar(l, function (def) {
+      if (def.data && def.data.features.length > 0) {
+        addToMap(def);
+        var el = $("tog-" + def.id); if (el) el.classList.add("active");
+      }
+      loaded++;
+      showLoad("Capas: " + loaded + "/" + autoLayers.length + " listas");
+      refreshUI();
+    });
+  });
+  Promise.all(initPromises).then(function () {
+    refreshUI(); hideLoad();
+    if ($("report-form-map")) initRptMap();
+  }).catch(function (e) { hideLoad(); toast("Error: " + e.message, "error"); });
+})();
