@@ -4,8 +4,8 @@
   var LY = [
     { id: "v_limite_cuenca_geojson", nombre: "Limite Cuenca", vista: "v_limite_cuenca_geojson", gf: "geometry", tipo: "polygon",
       auto: true, activo: false, data: null, lyr: null, cnt: 0,
-      pop: [["parroquia", "Parroquia"]], sty: { color: "#06b6d4", weight: 3, fillOpacity: 0 },
-      svg: '<svg width="20" height="14"><rect x="1" y="1" width="18" height="12" fill="none" stroke="#06b6d4" stroke-width="2" stroke-dasharray="5,3"/></svg>' },
+      pop: [["parroquia", "Parroquia"]], sty: { color: "#eab308", weight: 3, fillOpacity: 0 },
+      svg: '<svg width="20" height="14"><rect x="1" y="1" width="18" height="12" fill="none" stroke="#eab308" stroke-width="2" stroke-dasharray="5,3"/></svg>' },
     { id: "v_rios_urbanos_cuenca_geojson", nombre: "Rios Urbanos", vista: "v_rios_urbanos_cuenca_geojson", gf: "geometry", tipo: "line",
       auto: true, activo: false, data: null, lyr: null, cnt: 0,
       pop: [["nombre", "Nombre"], ["tipo", "Tipo"], ["long_km", "Longitud (km)"]], sty: { color: "#3b82f6", weight: 3, fillOpacity: 0 },
@@ -183,7 +183,18 @@
             var c = rptColor(f.properties && f.properties.tipo);
             return L.circleMarker(ll, { radius: 8, fillColor: c, color: "#fff", weight: 2, fillOpacity: 0.9 });
           },
-          onEachFeature: function (f, l) { l.bindPopup(mkPopup(def, f.properties), { maxWidth: 300, className: "info-popup" }); }
+          onEachFeature: function (f, l) {
+            var p = f.properties || {};
+            var extra = '<div class="popup-status-wrap"><label class="popup-label">Estado:</label><select class="popup-status-select" onchange="cambiarEstadoReporte(' + (p.id || "null") + ',this.value,this)">';
+            var estados = ["pendiente","en_revision","resuelto","rechazado"];
+            var labels = {"pendiente":"Pendiente","en_revision":"En Revision","resuelto":"Resuelto","rechazado":"Rechazado"};
+            var cur = p.estado || "pendiente";
+            estados.forEach(function(e){
+              extra += '<option value="' + e + '"' + (e === cur ? " selected" : "") + '>' + labels[e] + '</option>';
+            });
+            extra += '</select><span class="popup-status-msg"></span></div>';
+            l.bindPopup(mkPopup(def, p, extra), { maxWidth: 300, className: "info-popup" });
+          }
         }).addTo(map);
       } else if (def.id === "v_reportes_construcciones_geojson") {
         def.lyr = L.geoJSON(def.data, {
@@ -542,6 +553,140 @@
       validateConstruccionForm();
     });
   }
+
+  /* ═══ CHARTS ═════════════════════════════════════════════════ */
+  var chartInstance = null;
+  var currentChartTab = "predios";
+
+  function computeAreaRanges(features, areaKey) {
+    var areas = [];
+    features.forEach(function (f) {
+      var a = f.properties && f.properties[areaKey];
+      if (a != null && !isNaN(a) && a > 0) areas.push(Number(a));
+    });
+    if (areas.length === 0) return { labels: [], counts: [], total: 0, avg: 0, min: 0, max: 0 };
+    areas.sort(function (a, b) { return a - b; });
+    var maxVal = areas[areas.length - 1];
+    var binSize;
+    if (maxVal <= 200) binSize = 20;
+    else if (maxVal <= 1000) binSize = 100;
+    else if (maxVal <= 5000) binSize = 500;
+    else if (maxVal <= 20000) binSize = 2000;
+    else binSize = 5000;
+    var bins = {};
+    areas.forEach(function (a) {
+      var binIdx = Math.floor(a / binSize) * binSize;
+      var key = binIdx + "-" + (binIdx + binSize);
+      bins[key] = (bins[key] || 0) + 1;
+    });
+    var labels = Object.keys(bins).sort(function (a, b) { return parseInt(a) - parseInt(b); });
+    var counts = labels.map(function (l) { return bins[l]; });
+    var sum = areas.reduce(function (s, v) { return s + v; }, 0);
+    return { labels: labels, counts: counts, total: areas.length, avg: Math.round(sum / areas.length), min: areas[0], max: areas[areas.length - 1] };
+  }
+
+  function renderChart(type) {
+    var def = find(type === "predios" ? "v_predios_cuenca_geojson" : "v_construcciones_cuenca_geojson");
+    if (!def || !def.data || !def.data.features.length) {
+      toast("Cargue la capa de " + (type === "predios" ? "Predios" : "Construcciones") + " primero", "error");
+      return;
+    }
+    var range = computeAreaRanges(def.data.features, "area");
+    if (chartInstance) chartInstance.destroy();
+    var ctx = document.getElementById("area-chart");
+    var colors = range.labels.map(function (_, i) {
+      var t = i / Math.max(range.labels.length - 1, 1);
+      return "rgba(" + Math.round(99 + t * 100) + "," + Math.round(102 + t * 50) + "," + Math.round(241 - t * 40) + ",0.8)";
+    });
+    chartInstance = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: range.labels.map(function (l) { return l + " m\u00B2"; }),
+        datasets: [{
+          label: "Cantidad",
+          data: range.counts,
+          backgroundColor: colors,
+          borderColor: colors.map(function (c) { return c.replace("0.8", "1"); }),
+          borderWidth: 1,
+          borderRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+          legend: { display: false },
+          title: { display: true, text: "Distribucion de Areas - " + (type === "predios" ? "Predios" : "Construcciones"), color: "#e4e4e7", font: { size: 14, weight: "600", family: "Inter" } },
+          tooltip: { backgroundColor: "rgba(15,15,35,0.95)", titleFont: { family: "Inter" }, bodyFont: { family: "Inter" } }
+        },
+        scales: {
+          x: {
+            title: { display: true, text: "Rango de Area (m\u00B2)", color: "#a1a1aa", font: { family: "Inter", size: 11 } },
+            ticks: { color: "#a1a1aa", font: { family: "Inter", size: 9 }, maxRotation: 45 },
+            grid: { color: "rgba(255,255,255,0.04)" }
+          },
+          y: {
+            title: { display: true, text: "Cantidad", color: "#a1a1aa", font: { family: "Inter", size: 11 } },
+            ticks: { color: "#a1a1aa", font: { family: "Inter", size: 10 } },
+            grid: { color: "rgba(255,255,255,0.04)" },
+            beginAtZero: true
+          }
+        }
+      }
+    });
+    var sum = range.counts.reduce(function (s, v) { return s + v; }, 0);
+    $("chart-summary").innerHTML =
+      '<span class="chart-stat"><strong>' + range.total.toLocaleString("es-EC") + '</strong> features con area</span>' +
+      '<span class="chart-stat">Promedio: <strong>' + range.avg.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
+      '<span class="chart-stat">Min: <strong>' + range.min.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
+      '<span class="chart-stat">Max: <strong>' + range.max.toLocaleString("es-EC") + ' m\u00B2</strong></span>' +
+      '<span class="chart-stat">Total features: <strong>' + def.cnt.toLocaleString("es-EC") + '</strong></span>';
+  }
+
+  window.abrirGraficos = function () {
+    var m = $("chart-modal"); if (m) m.classList.add("open");
+    renderChart(currentChartTab);
+  };
+  window.cerrarGraficos = function () {
+    var m = $("chart-modal"); if (m) m.classList.remove("open");
+    if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+  };
+  window.switchChartTab = function (tab, btn) {
+    currentChartTab = tab;
+    document.querySelectorAll(".chart-tab").forEach(function (b) { b.classList.remove("active"); });
+    if (btn) btn.classList.add("active");
+    renderChart(tab);
+  };
+
+  /* ═══ STATUS CHANGE ═══════════════════════════════════════════ */
+  window.cambiarEstadoReporte = function (id, nuevoEstado, selectEl) {
+    if (!id) { toast("ID del reporte no disponible", "error"); return; }
+    var msg = selectEl.parentElement.querySelector(".popup-status-msg");
+    if (msg) { msg.textContent = "Guardando..."; msg.className = "popup-status-msg saving"; }
+    fetch("/api/update-estado", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: id, estado: nuevoEstado })
+    }).then(function (r) {
+      if (!r.ok) return r.json().then(function (d) { throw new Error(d.error || "HTTP " + r.status); });
+      return r.json();
+    }).then(function () {
+      if (msg) { msg.textContent = "Guardado"; msg.className = "popup-status-msg ok"; }
+      toast("Estado actualizado a: " + nuevoEstado, "success");
+      var def = find("reportes_ciudadanos");
+      if (def && def.activo && def.lyr) {
+        def.lyr.eachLayer(function (layer) {
+          if (layer.feature && layer.feature.properties && layer.feature.properties.id === id) {
+            layer.feature.properties.estado = nuevoEstado;
+          }
+        });
+      }
+      setTimeout(function () { if (msg) msg.className = "popup-status-msg"; }, 2000);
+    }).catch(function (e) {
+      if (msg) { msg.textContent = "Error"; msg.className = "popup-status-msg error"; }
+      toast("Error al actualizar: " + e.message, "error");
+    });
+  };
 
   /* ═══ PDF GENERATION ═══════════════════════════════════════════ */
   window.generarPDF = function () {
