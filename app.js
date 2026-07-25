@@ -577,16 +577,30 @@
     return Math.abs(area / 2) * 111319.49 * 111319.49 * Math.cos(-2.9 * Math.PI / 180);
   }
 
+  function detectAreaKey(features) {
+    var candidates = ["area", "area_m2", "sup", "superficie", "hectareas", "st_area"];
+    var sample = Math.min(features.length, 50);
+    for (var c = 0; c < candidates.length; c++) {
+      var k = candidates[c], hits = 0;
+      for (var i = 0; i < sample; i++) {
+        var v = features[i].properties && features[i].properties[k];
+        if (v != null && !isNaN(v) && Number(v) > 0) hits++;
+      }
+      if (hits >= sample * 0.3) return k;
+    }
+    return null;
+  }
+
   function getAreas(features) {
     var areas = [];
-    var hasAreaProp = features.length > 0 && features[0].properties && features[0].properties.area != null && !isNaN(features[0].properties.area);
+    var areaKey = detectAreaKey(features);
     features.forEach(function (f) {
       var a = 0;
-      if (hasAreaProp) {
-        a = Number(f.properties.area);
-      } else if (f.geometry) {
-        a = polygonAreaM2(f.geometry);
+      if (areaKey && f.properties) {
+        a = Number(f.properties[areaKey]);
+        if (isNaN(a) || a <= 0) a = 0;
       }
+      if (a === 0 && f.geometry) a = polygonAreaM2(f.geometry);
       if (a > 0) areas.push(a);
     });
     return areas;
@@ -596,22 +610,29 @@
     if (areas.length === 0) return { labels: [], counts: [], total: 0, avg: 0, min: 0, max: 0, sum: 0 };
     areas.sort(function (a, b) { return a - b; });
     var maxVal = areas[areas.length - 1];
-    var binSize;
-    if (maxVal <= 100) binSize = 10;
-    else if (maxVal <= 500) binSize = 50;
-    else if (maxVal <= 2000) binSize = 200;
-    else if (maxVal <= 10000) binSize = 1000;
-    else binSize = 5000;
+    var minVal = areas[0];
+    var targetBins = 7;
+    var rawBin = (maxVal - minVal) / targetBins;
+    if (rawBin <= 0) rawBin = maxVal / targetBins || 1;
+    var mag = Math.pow(10, Math.floor(Math.log10(rawBin)));
+    var res = rawBin / mag;
+    var nice;
+    if (res <= 1.5) nice = mag;
+    else if (res <= 3) nice = 2 * mag;
+    else if (res <= 7) nice = 5 * mag;
+    else nice = 10 * mag;
+    if (nice < 1) nice = 1;
+    var start = Math.floor(minVal / nice) * nice;
     var bins = {};
     areas.forEach(function (a) {
-      var binIdx = Math.floor(a / binSize) * binSize;
-      var key = binIdx + "-" + (binIdx + binSize);
+      var b = Math.floor((a - start) / nice) * nice + start;
+      var key = b + "-" + (b + nice);
       bins[key] = (bins[key] || 0) + 1;
     });
-    var labels = Object.keys(bins).sort(function (a, b) { return parseInt(a) - parseInt(b); });
+    var labels = Object.keys(bins).sort(function (a, b) { return parseFloat(a) - parseFloat(b); });
     var counts = labels.map(function (l) { return bins[l]; });
     var sum = areas.reduce(function (s, v) { return s + v; }, 0);
-    return { labels: labels, counts: counts, total: areas.length, avg: Math.round(sum / areas.length), min: Math.round(areas[0]), max: Math.round(areas[areas.length - 1]), sum: Math.round(sum) };
+    return { labels: labels, counts: counts, total: areas.length, avg: Math.round(sum / areas.length), min: Math.round(minVal), max: Math.round(maxVal), sum: Math.round(sum) };
   }
 
   function ensureLayerAndThen(type, cb) {
@@ -635,11 +656,11 @@
   function renderChart(type) {
     ensureLayerAndThen(type, function (def) {
       var areas = getAreas(def.data.features);
-      var range = buildBins(areas);
-      if (range.total === 0) {
-        toast("No hay datos de area disponibles para " + def.nombre, "error");
+      if (areas.length === 0) {
+        toast("No se pudo calcular area para " + def.nombre + ". Verifique que la capa este cargada.", "error");
         return;
       }
+      var range = buildBins(areas);
       if (chartInstance) chartInstance.destroy();
       var ctx = document.getElementById("area-chart");
       var baseH = type === "predios" ? [99, 102, 241] : [239, 68, 68];
