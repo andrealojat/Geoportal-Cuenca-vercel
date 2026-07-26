@@ -608,31 +608,24 @@
 
   function buildBins(areas) {
     if (areas.length === 0) return { labels: [], counts: [], total: 0, avg: 0, min: 0, max: 0, sum: 0 };
-    areas.sort(function (a, b) { return a - b; });
-    var maxVal = areas[areas.length - 1];
-    var minVal = areas[0];
-    var targetBins = 7;
-    var rawBin = (maxVal - minVal) / targetBins;
-    if (rawBin <= 0) rawBin = maxVal / targetBins || 1;
-    var mag = Math.pow(10, Math.floor(Math.log10(rawBin)));
-    var res = rawBin / mag;
-    var nice;
-    if (res <= 1.5) nice = mag;
-    else if (res <= 3) nice = 2 * mag;
-    else if (res <= 7) nice = 5 * mag;
-    else nice = 10 * mag;
-    if (nice < 1) nice = 1;
-    var start = Math.floor(minVal / nice) * nice;
-    var bins = {};
+    var ranges = [
+      { min: 0, max: 200, label: "0-200" },
+      { min: 200, max: 500, label: "200-500" },
+      { min: 500, max: 1000, label: "500-1,000" },
+      { min: 1000, max: 2000, label: "1,000-2,000" },
+      { min: 2000, max: 5000, label: "2,000-5,000" },
+      { min: 5000, max: Infinity, label: ">5,000" }
+    ];
+    var counts = ranges.map(function () { return 0; });
+    var sum = 0;
     areas.forEach(function (a) {
-      var b = Math.floor((a - start) / nice) * nice + start;
-      var key = b + "-" + (b + nice);
-      bins[key] = (bins[key] || 0) + 1;
+      sum += a;
+      for (var i = 0; i < ranges.length; i++) {
+        if (a >= ranges[i].min && a < ranges[i].max) { counts[i]++; break; }
+      }
     });
-    var labels = Object.keys(bins).sort(function (a, b) { return parseFloat(a) - parseFloat(b); });
-    var counts = labels.map(function (l) { return bins[l]; });
-    var sum = areas.reduce(function (s, v) { return s + v; }, 0);
-    return { labels: labels, counts: counts, total: areas.length, avg: Math.round(sum / areas.length), min: Math.round(minVal), max: Math.round(maxVal), sum: Math.round(sum) };
+    var labels = ranges.map(function (r) { return r.label; });
+    return { labels: labels, counts: counts, total: areas.length, avg: Math.round(sum / areas.length), min: Math.round(areas.sort(function(a,b){return a-b})[0]), max: Math.round(areas[areas.length - 1]), sum: Math.round(sum) };
   }
 
   function ensureLayerAndThen(type, cb) {
@@ -711,69 +704,61 @@
     renderChart(tab);
   };
 
-  /* ═══ RIVER PROTECTION MARGIN 50M ════════════════════════════ */
+  /* ═══ RIVER PROTECTION MARGIN 200M ════════════════════════════ */
   var riverMarginLayer = null;
   var riverAffectedLayer = null;
 
-  function toRad(deg) { return deg * Math.PI / 180; }
-  function toDeg(rad) { return rad * 180 / Math.PI; }
+  function toRad(d) { return d * Math.PI / 180; }
 
-  function bufferLineMeters(coords, meters) {
-    var leftCoords = [], rightCoords = [];
-    for (var i = 0; i < coords.length - 1; i++) {
-      var lon1 = coords[i][0], lat1 = coords[i][1];
-      var lon2 = coords[i + 1][0], lat2 = coords[i + 1][1];
-      var dLon = toRad(lon2 - lon1), dLat = toRad(lat2 - lat1);
-      var brng = Math.atan2(Math.sin(dLon) * Math.cos(toRad(lat2)), Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) - Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(dLon));
-      var leftBrng = brng - Math.PI / 2;
-      var rightBrng = brng + Math.PI / 2;
-      var dLatLeft = (meters / 6371000) * Math.cos(leftBrng);
-      var dLonLeft = (meters / 6371000) * Math.sin(leftBrng) / Math.cos(toRad(lat1));
-      var dLatRight = (meters / 6371000) * Math.cos(rightBrng);
-      var dLonRight = (meters / 6371000) * Math.sin(rightBrng) / Math.cos(toRad(lat1));
-      leftCoords.push([lon1 + dLonLeft, lat1 + dLatLeft]);
-      rightCoords.push([lon1 + dLonRight, lat1 + dLatRight]);
-      if (i === coords.length - 2) {
-        leftCoords.push([lon2 + dLonLeft, lat2 + dLatLeft]);
-        rightCoords.push([lon2 + dLonRight, lat2 + dLatRight]);
+  function offsetLineString(coords, meters) {
+    var left = [], right = [];
+    var mPerDegLat = 111319.49;
+    for (var i = 0; i < coords.length; i++) {
+      var lat = coords[i][1];
+      var mPerDegLng = mPerDegLat * Math.cos(toRad(lat));
+      var dx, dy;
+      if (i < coords.length - 1) {
+        dx = (coords[i + 1][0] - coords[i][0]) * mPerDegLng;
+        dy = (coords[i + 1][1] - coords[i][1]) * mPerDegLat;
+      } else {
+        dx = (coords[i][0] - coords[i - 1][0]) * mPerDegLng;
+        dy = (coords[i][1] - coords[i - 1][1]) * mPerDegLat;
       }
+      var len = Math.sqrt(dx * dx + dy * dy);
+      if (len === 0) { left.push(coords[i].slice()); right.push(coords[i].slice()); continue; }
+      var nx = -dy / len * meters;
+      var ny = dx / len * meters;
+      left.push([coords[i][0] + nx / mPerDegLng, coords[i][1] + ny / mPerDegLat]);
+      right.push([coords[i][0] - nx / mPerDegLng, coords[i][1] - ny / mPerDegLat]);
     }
-    rightCoords.reverse();
-    return leftCoords.concat(rightCoords);
+    return { left: left, right: right };
   }
 
-  function polygonContainsPoint(ring, point) {
+  function buildBufferPolygon(coords, meters) {
+    var offsets = offsetLineString(coords, meters);
+    var ring = offsets.left.slice();
+    var revRight = offsets.right.slice().reverse();
+    ring = ring.concat(revRight);
+    ring.push(ring[0].slice());
+    return ring;
+  }
+
+  function pointInRing(point, ring) {
     var inside = false;
     for (var i = 0, j = ring.length - 1; i < ring.length; j = i++) {
       var xi = ring[i][0], yi = ring[i][1];
       var xj = ring[j][0], yj = ring[j][1];
-      var intersect = ((yi > point[1]) !== (yj > point[1])) && (point[0] < (xj - xi) * (point[1] - yi) / (yj - yi) + xi);
-      if (intersect) inside = !inside;
+      if (((yi > point[1]) !== (yj > point[1])) && (point[0] < (xj - xi) * (point[1] - yi) / (yj - yi) + xi)) inside = !inside;
     }
     return inside;
   }
 
-  function pointInPolygon(point, polygon) {
-    if (polygon.type === "Polygon") return polygonContainsPoint(polygon.coordinates[0], point);
-    if (polygon.type === "MultiPolygon") {
-      for (var i = 0; i < polygon.coordinates.length; i++) {
-        if (polygonContainsPoint(polygon.coordinates[i][0], point)) return true;
-      }
-    }
-    return false;
-  }
-
-  function polygonIntersectsPolygon(geomA, geomB) {
-    var coordsA = geomA.type === "Polygon" ? [geomA.coordinates[0]] : geomA.coordinates;
-    var coordsB = geomB.type === "Polygon" ? [geomB.coordinates[0]] : geomB.coordinates;
-    for (var i = 0; i < coordsA.length; i++) {
-      for (var j = 0; j < coordsA[i].length; j++) {
-        if (polygonContainsPoint(coordsB[0], coordsA[i][j])) return true;
-      }
-    }
-    for (var i = 0; i < coordsB.length; i++) {
-      for (var j = 0; j < coordsB[i].length; j++) {
-        if (polygonContainsPoint(coordsA[0], coordsB[i][j])) return true;
+  function pointInGeom(pt, geom) {
+    if (!geom) return false;
+    if (geom.type === "Polygon") return pointInRing(pt, geom.coordinates[0]);
+    if (geom.type === "MultiPolygon") {
+      for (var i = 0; i < geom.coordinates.length; i++) {
+        if (pointInRing(pt, geom.coordinates[i][0])) return true;
       }
     }
     return false;
@@ -785,7 +770,7 @@
     if (!riosDef) { toast("Capa de rios no encontrada", "error"); return; }
     if (!consDef) { toast("Capa de construcciones no encontrada", "error"); return; }
 
-    showLoad("Calculando margenes de proteccion (50m)...");
+    showLoad("Calculando margenes de proteccion (200m)...");
 
     function doCalc() {
       if (riverMarginLayer) { map.removeLayer(riverMarginLayer); riverMarginLayer = null; }
@@ -798,40 +783,28 @@
       if (riosDef.data && riosDef.data.features) {
         riosDef.data.features.forEach(function (f) {
           if (!f.geometry) return;
-          totalRios++;
-          var coords = [];
-          if (f.geometry.type === "LineString") coords = f.geometry.coordinates;
-          else if (f.geometry.type === "MultiLineString") {
-            var longest = [];
-            f.geometry.coordinates.forEach(function (s) { if (s.length > longest.length) longest = s; });
-            coords = longest;
-          }
-          if (coords.length < 2) return;
-          var ring = bufferLineMeters(coords, 50);
-          if (ring.length >= 4) {
-            ring.push(ring[0]);
-            marginFeatures.push({ type: "Feature", properties: { nombre: f.properties.nombre || "Rio", tipo: "Margen 50m" }, geometry: { type: "Polygon", coordinates: [ring] } });
-          }
-        });
-      }
+          var allCoords = [];
+          if (f.geometry.type === "LineString") allCoords = [f.geometry.coordinates];
+          else if (f.geometry.type === "MultiLineString") allCoords = f.geometry.coordinates;
 
-      if (consDef.data && consDef.data.features) {
-        consDef.data.features.forEach(function (f) {
-          if (!f.geometry) return;
-          var centroid = featureCentroid(f.geometry);
-          var pt = [centroid.lng, centroid.lat];
-          for (var i = 0; i < marginFeatures.length; i++) {
-            if (pointInPolygon(pt, marginFeatures[i].geometry)) {
-              affectedConstructions.push(f);
-              break;
+          allCoords.forEach(function (coords) {
+            if (coords.length < 2) return;
+            totalRios++;
+            var ring = buildBufferPolygon(coords, 200);
+            if (ring.length >= 5) {
+              marginFeatures.push({
+                type: "Feature",
+                properties: { nombre: f.properties.nombre || "Rio", tipo: "Margen 200m" },
+                geometry: { type: "Polygon", coordinates: [ring] }
+              });
             }
-          }
+          });
         });
       }
 
       if (marginFeatures.length === 0) {
         hideLoad();
-        toast("No se pudieron calcular margenes", "error");
+        toast("No se pudieron calcular margenes. Verifique que la capa de rios este activa.", "error");
         return;
       }
 
@@ -839,16 +812,30 @@
         { type: "FeatureCollection", features: marginFeatures },
         { style: { color: "#3b82f6", weight: 1, fillColor: "#3b82f6", fillOpacity: 0.15, dashArray: "5,5" }, interactive: false }
       ).addTo(map);
+      map.fitBounds(riverMarginLayer.getBounds().pad(0.1));
+
+      if (consDef.data && consDef.data.features) {
+        consDef.data.features.forEach(function (f) {
+          if (!f.geometry) return;
+          var centroid = featureCentroid(f.geometry);
+          var pt = [centroid.lng, centroid.lat];
+          for (var i = 0; i < marginFeatures.length; i++) {
+            if (pointInGeom(pt, marginFeatures[i].geometry)) {
+              affectedConstructions.push(f);
+              break;
+            }
+          }
+        });
+      }
 
       if (affectedConstructions.length > 0) {
-        var affGeo = affectedConstructions.map(function (f) { return f.properties; });
         riverAffectedLayer = L.geoJSON(
           { type: "FeatureCollection", features: affectedConstructions },
           {
             style: { color: "#f59e0b", weight: 2, fillColor: "#f59e0b", fillOpacity: 0.4 },
             onEachFeature: function (f, l) {
               var p = f.properties || {};
-              var extra = '<div class="popup-actions"><div style="color:#f59e0b;font-size:0.75rem;font-weight:600">Dentro del margen de proteccion de 50m</div></div>';
+              var extra = '<div class="popup-actions"><div style="color:#f59e0b;font-size:0.75rem;font-weight:600">Dentro del margen de proteccion de 200m</div></div>';
               l.bindPopup(mkPopup(consDef, p, extra), { maxWidth: 300, className: "info-popup" });
             }
           }
@@ -856,7 +843,7 @@
       }
 
       hideLoad();
-      toast(affectedConstructions.length + " construcciones afectadas por margenes de 50m (" + totalRios + " rios analizados)", "success");
+      toast(affectedConstructions.length + " construcciones afectadas por margenes de 200m (" + totalRios + " rios analizados)", "success");
 
       var panel = $("river-margin-info");
       if (panel) {

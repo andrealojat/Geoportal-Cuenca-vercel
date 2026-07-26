@@ -332,8 +332,8 @@ body{
 }
 .chart-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
 .chart-tab:hover{color:var(--text-primary)}
-.chart-body{padding:20px;flex:1;overflow-y:auto;min-height:0}
-.chart-body canvas{width:100%!important;height:auto!important}
+.chart-body{padding:20px;flex:1;overflow-y:auto;min-height:0;position:relative}
+.chart-body canvas{width:100%!important;height:380px!important}
 .chart-summary{
   padding:12px 20px;border-top:1px solid var(--border);
   display:flex;gap:16px;flex-wrap:wrap;
