@@ -407,12 +407,16 @@
         if (rm) { rm.innerHTML = "Reporte enviado correctamente"; rm.className = "report-message success"; }
         limpiarReporte();
         var def = find("reportes_ciudadanos");
-        if (def && def.activo) {
-          map.removeLayer(def.lyr); def.lyr = null; def.activo = false; def.data = null;
+        if (def) {
+          if (def.activo && def.lyr) { map.removeLayer(def.lyr); }
+          def.lyr = null; def.activo = false; def.data = null;
           cargar(def).then(function () {
             try { addToMap(def); } catch(e) {}
             var el = $("tog-reportes_ciudadanos");
-            if (el) el.classList.add("active"); refreshUI();
+            if (el) el.classList.add("active");
+            var card = document.querySelector('[data-layer="reportes_ciudadanos"]');
+            if (card) card.classList.add("active");
+            refreshUI();
           }).finally(function(){ hideLoad(); });
         }
       }).catch(function (e) {
@@ -925,6 +929,20 @@
 
   /* ═══ PDF GENERATION ═══════════════════════════════════════════ */
   window.generarPDF = function () {
+    showLoad("Generando PDF...");
+    var rcDef = find("reportes_ciudadanos");
+    var rrDef = find("v_reportes_construcciones_geojson");
+    var tasks = [];
+    if (rcDef) { rcDef.data = null; tasks.push(cargar(rcDef)); }
+    if (rrDef) { rrDef.data = null; tasks.push(cargar(rrDef)); }
+    Promise.all(tasks).then(function () {
+      try { buildPDF(); } catch(e) { toast("Error generando PDF: " + e.message, "error"); }
+    }).catch(function (e) {
+      toast("Error cargando datos para PDF: " + e.message, "error");
+    }).finally(function () { hideLoad(); });
+  };
+
+  function buildPDF() {
     var jsPDF = window.jspdf.jsPDF;
     var doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" });
     var pageW = doc.internal.pageSize.getWidth();
@@ -1044,7 +1062,7 @@
 
     doc.save("Reportes_Geoportal_Cuenca_" + new Date().toISOString().slice(0, 10) + ".pdf");
     toast("PDF generado correctamente", "success");
-  };
+  }
 
   /* ═══ INIT ═════════════════════════════════════════════════ */
   showLoad("Inicializando geoportal...");
