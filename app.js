@@ -556,7 +556,7 @@
 
   /* ═══ CHARTS ═════════════════════════════════════════════════ */
   var chartInstance = null;
-  var currentChartTab = "predios";
+  var currentChartTab = "construcciones";
 
   function polygonAreaM2(geometry) {
     if (!geometry || !geometry.coordinates) return 0;
@@ -609,12 +609,11 @@
   function buildBins(areas) {
     if (areas.length === 0) return { labels: [], counts: [], total: 0, avg: 0, min: 0, max: 0, sum: 0 };
     var ranges = [
-      { min: 0, max: 200, label: "0-200" },
-      { min: 200, max: 500, label: "200-500" },
-      { min: 500, max: 1000, label: "500-1,000" },
-      { min: 1000, max: 2000, label: "1,000-2,000" },
-      { min: 2000, max: 5000, label: "2,000-5,000" },
-      { min: 5000, max: Infinity, label: ">5,000" }
+      { min: 0, max: 100, label: "0-100" },
+      { min: 100, max: 200, label: "100-200" },
+      { min: 200, max: 300, label: "200-300" },
+      { min: 300, max: 500, label: "300-500" },
+      { min: 500, max: Infinity, label: ">500" }
     ];
     var counts = ranges.map(function () { return 0; });
     var sum = 0;
@@ -671,7 +670,7 @@
           responsive: true, maintainAspectRatio: true,
           plugins: {
             legend: { display: false },
-            title: { display: true, text: "Distribucion de Areas - " + def.nombre, color: "#e4e4e7", font: { size: 14, weight: "600", family: "Inter" } },
+            title: { display: true, text: "Distribucion de Areas - Construcciones", color: "#e4e4e7", font: { size: 14, weight: "600", family: "Inter" } },
             tooltip: { backgroundColor: "rgba(15,15,35,0.95)", titleFont: { family: "Inter" }, bodyFont: { family: "Inter" } }
           },
           scales: {
@@ -770,7 +769,7 @@
     if (!riosDef) { toast("Capa de rios no encontrada", "error"); return; }
     if (!consDef) { toast("Capa de construcciones no encontrada", "error"); return; }
 
-    showLoad("Calculando margenes de proteccion (200m)...");
+    showLoad("Calculando margenes de proteccion (100m)...");
 
     function doCalc() {
       if (riverMarginLayer) { map.removeLayer(riverMarginLayer); riverMarginLayer = null; }
@@ -790,11 +789,11 @@
           allCoords.forEach(function (coords) {
             if (coords.length < 2) return;
             totalRios++;
-            var ring = buildBufferPolygon(coords, 200);
+            var ring = buildBufferPolygon(coords, 100);
             if (ring.length >= 5) {
               marginFeatures.push({
                 type: "Feature",
-                properties: { nombre: f.properties.nombre || "Rio", tipo: "Margen 200m" },
+                properties: { nombre: f.properties.nombre || "Rio", tipo: "Margen 100m" },
                 geometry: { type: "Polygon", coordinates: [ring] }
               });
             }
@@ -835,7 +834,7 @@
             style: { color: "#f59e0b", weight: 2, fillColor: "#f59e0b", fillOpacity: 0.4 },
             onEachFeature: function (f, l) {
               var p = f.properties || {};
-              var extra = '<div class="popup-actions"><div style="color:#f59e0b;font-size:0.75rem;font-weight:600">Dentro del margen de proteccion de 200m</div></div>';
+              var extra = '<div class="popup-actions"><div style="color:#f59e0b;font-size:0.75rem;font-weight:600">Dentro del margen de proteccion de 100m</div></div>';
               l.bindPopup(mkPopup(consDef, p, extra), { maxWidth: 300, className: "info-popup" });
             }
           }
@@ -843,7 +842,7 @@
       }
 
       hideLoad();
-      toast(affectedConstructions.length + " construcciones afectadas por margenes de 200m (" + totalRios + " rios analizados)", "success");
+      toast(affectedConstructions.length + " construcciones afectadas por margenes de 100m (" + totalRios + " rios analizados)", "success");
 
       var panel = $("river-margin-info");
       if (panel) {
